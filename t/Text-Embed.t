@@ -19,7 +19,7 @@ my $DEBUG = shift;
 BEGIN 
 { 
     @parsers = ('default','define','cdata');
-    @procs   = ('raw','block','trim','compress');
+    @procs   = ('raw','block-indent','block-noindent','trim','compress');
     @names   = ();
     $results = {};
 
@@ -42,6 +42,8 @@ for(my $i=0; $i<@parsers; $i++)
         my $psr  = $parsers[$i];
         my $prc  = $procs[$j];
         my $name = $psr."_".$prc;
+
+        $name =~ s#-#_#sgoi;
 
         my $src  = $DATA{PM_TEMPLATE};
         $src    .= "\n\n__DATA__\n\n";

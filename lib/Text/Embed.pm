@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp;
 
-our $VERSION  = '0.01';
+our $VERSION  = '0.02';
 
 my %modules   = ();
 my %regexen   = ();
@@ -38,15 +38,16 @@ $rex_parse             = join('|', keys %def_parse);
 
 my %def_proc  =
 (
-    ':raw'       => undef,
-    ':trim'      => sub{ trim($_[1]);     },
-    ':compress'  => sub{ compress($_[1]); },
-    ':block'     => sub{ block($_[1]);    },
+    ':raw'            => undef,
+    ':trim'           => sub{ trim($_[1]);     },
+    ':compress'       => sub{ compress($_[1]); },
+    ':block-indent'   => sub{ block($_[1]);    },
+    ':block-noindent' => sub{ block($_[1],1);  },
 
-    ':strip-cpp' => sub{strip($_,'/\*','\*/'),strip($_, '//')foreach @_;},
-    ':strip-c'   => sub{strip($_,'/\*','\*/')                foreach @_;},
-    ':strip-xml' => sub{strip($_,'<!--','-->')               foreach @_;},
-    ':strip-perl'=> sub{strip($_)                            foreach @_;},
+    ':strip-cpp' => sub{strip($_[1],'/\*','\*/'),strip($_[1], '//');},
+    ':strip-c'   => sub{strip($_[1],'/\*','\*/');},
+    ':strip-xml' => sub{strip($_[1],'<!--','-->');},
+    ':strip-perl'=> sub{strip($_[1]);},
 );
 
 $def_proc{':default'}  = $def_proc{':raw'};
@@ -82,6 +83,10 @@ sub import
                         $_ = ($_ =~ /\:\:/go) ? \&{$_} : 
                                                 \&{$caller."\::".$_}; 
                     }
+                }
+                else{
+                    Carp::croak("Not a CODE reference")
+                        unless "CODE" eq ref($_);
                 }
             }
         }
@@ -137,11 +142,8 @@ sub _read_data
         
 
         #  invoke any callbacks...
-        if($code)
-        {
-            for(my $i=0; $i<@data; $i+=2)
-            {
-                trim(\$data[$i]);
+        if($code){
+            for(my $i=0; $i<@data; $i+=2){
                 $_ && $_->(\$data[$i], \$data[$i+1])  
                     foreach @$code;
             }
@@ -162,15 +164,18 @@ sub _read_data
 sub compress
 {
     my $txt = shift;
-    $$txt   =~ s#\s+# #sgoi;
-    trim($txt);
+    s#\s+# #gs, s#^\s+## , s#\s+$## for($$txt);
 }
 
 sub block
 {
     my $txt = shift;
-    #TODO: this could be nicer
-    $$txt   =~ s#^(?:$NL\s*$NL)*(.*?)(?:$NL\s*$NL)*$#$/$1$/#soi;
+    my $i   = shift;
+    if($i){
+        ($i) = sort {length($a) <=> length($b)} $$txt =~ m#^$NL?(\s+)\S#mg;
+        s#^$i##mg for($$txt);   
+    }  
+    s#^\s+$##mg for($$txt);
 }
 
 sub trim
@@ -186,7 +191,7 @@ sub strip
     my $txt = shift;
     my $beg = shift || '\#';
     my $end = shift || $NL;
-    $$txt =~ s#$NL?$beg.*?$end##sgi;
+    $$txt =~ s#$beg.*?$end##sgi;
 }
 
 sub interpolate
@@ -288,7 +293,7 @@ Text::Embed - Cleanly seperate unwieldy text from your source code
 
 =head1 ABSTRACT
 
-Often, code requires large chunks of text to operate - not large enough 
+Often, code requires chunks of text to operate - not large enough 
 to add extra file dependencies, but enough to make using quotes and 
 heredocs' ugly.
 
@@ -297,7 +302,7 @@ and as such is difficult to differentiate and maintain when it is
 embedded inside more code. Similarly, CGI scripts often include 
 embedded HTML or SQL templates. 
 
-B<Text::Embed> provides the programmer with an flexible way to store 
+B<Text::Embed> provides the programmer with a flexible way to store 
 these portions of text in their namespace's __DATA__ handle - I<away 
 from the logic> - and access them through the package variable B<%DATA>. 
 
@@ -371,6 +376,7 @@ leading or trailing empty strings will be removed automatically.
 =item CODE
 
     use Text::Embed sub{$_ = shift; ...}
+    use Text::Embed &Some::Other::Function;
 
 A subroutine will be passed a reference to the __DATA__ I<string>. 
 It should return a list of key-value pairs.
@@ -382,7 +388,19 @@ predefined formats:
 
 =over 4
 
+=item :default
+
+Line-oriented __DATA__ like format.
+
+    __BAZ__ 
+        baz baz baz
+    __FOO__
+        foo foo foo
+        foo foo foo
+
 =item :define
+
+Line-oriented CPP-like format.
 
     #define BAZ 
         baz baz baz
@@ -392,19 +410,13 @@ predefined formats:
 
 =item :cdata
 
+Line-agnostic CDATA-like format. Anything outside of tags is ignored.
+
     <![BAZ[baz baz baz]]>
     <![FOO[
         foo foo foo
         foo foo foo
     ]]>
-
-=item :default
-
-    __BAZ__ 
-        baz baz baz
-    __FOO__
-        foo foo foo
-        foo foo foo
 
 =back
 
@@ -427,9 +439,13 @@ Removes trailing or leading whitespace
 
 Substitutes zero or more whitspace with a single <SPACE>
 
-=item :block
+=item :block-indent
 
-Removes trailing or leading blank lines, preserves indentation
+Removes trailing or leading blank lines, preserves all indentation
+
+=item :block-noindent
+
+Removes trailing or leading blank lines, preserves unique indentation
 
 =item :raw
 
@@ -522,7 +538,7 @@ to rename or modify keys. Undefining a key removes the entry from B<%DATA>.
 Several utility functions are available to aid implementing custom 
 processing handlers. 
 
-The first set are equivalent to the default processing options:
+These are mostly equivalent to the default processing options:
 
 =over 4
 
@@ -536,27 +552,26 @@ The first set are equivalent to the default processing options:
     use Text::Embed(':default',':compress');
     use Text::Embed(':default', sub {Text::Embed::compress($_[1]);} );
 
-=item Text::Embed::block SCALARREF
+=item Text::Embed::block SCALARREF BOOLEAN
 
-    use Text::Embed(':default',':block');
+    use Text::Embed(':default',':block-indent');
     use Text::Embed(':default', sub {Text::Embed::block($_[1]);} );
 
-=back
-
-Two additional functions are available:
-
-=over 4
+If a true value is passed as the second argument, then shared
+indentation is removed, ie B<:block-noindent>.
 
 =item Text::Embed::strip SCALARREF [REGEX] [REGEX]
 
-If similar behaviour to comment stripping is required in 
-a handler, then this function can parse both line-based and 
-multi-line comments, depending on its input.
+    use Text::Embed(':default',':strip-perl');
+    use Text::Embed(':default', sub {Text::Embed::strip($_[1]);} );
 
-For example, C++ comments are stripped using:
+Strips all sequences between second and third arguments. For example, C++ 
+comments are stripped using:
 
     Text::Embed::strip(\$my_data, '//');
     Text::Embed::strip(\$my_data, '/\*', '\*/');
+
+The default arguments are '#' and '\n' respectively.
 
 =item Text::Embed::interpolate SCALARREF HASHREF [REGEX]
 
@@ -589,9 +604,9 @@ causes:
 =item COMMENTS
 
 It is important to realise that B<Text::Embed> does I<not> have its own 
-comment syntax or preprocessor. I<Comments should exist in the body of 
-a segment - not preceding it>. Any parser that works using C<split()> is 
-likely to fail if comments precede the first segment.
+comment syntax or preprocessor. Any parser that works using C<split()> is 
+likely to fail if comments precede the first segment. I<Comments should 
+exist in the body of a segment - not preceding it>.
 
 =item CUSTOM PARSING
 
