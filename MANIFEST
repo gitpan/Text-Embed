@@ -1,0 +1,8 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+t/Text-Embed.t
+lib/Text/Embed.pm
+misc/debug-docs.pl
+misc/debug-test.pl
