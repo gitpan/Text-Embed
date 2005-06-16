@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp;
 
-our $VERSION  = '0.02';
+our $VERSION  = '0.03';
 
 my %modules   = ();
 my %regexen   = ();
@@ -15,15 +15,16 @@ my $rex_proc  = undef;
 my $rex_parse = undef;
 
 my $NL        = '(?:\r?\n)'; 
+my $VARS      = '\$\((\w+)\)';
 
-###########################################################################
-# Default handlers for parsing
-## 
+#
+# Default handlers for parsing - see POD
+# 
 
 my %def_parse  =
 (
-    ':underscore' => "$NL"."__([^_].*[^_])__$NL",
-    ':define'     => "$NL#define[ \t]+(.+?)$NL",
+    ':underscore' => qr/${NL}__([^_].*[^_])__$NL/,
+    ':define'     => qr/${NL}#define\s+?(\S+?)(?:$NL|\s+?$NL|\s+?)/,
     ':cdata'      => sub{$_ = shift or return; 
                        return($$_ =~ m#\s*?<!\[(.+?)\[(.*?)\]\]>\s*#sgo);
                      },
@@ -32,9 +33,9 @@ my %def_parse  =
 $def_parse{':default'} = $def_parse{':underscore'};
 $rex_parse             = join('|', keys %def_parse);
 
-###########################################################################
-# Default handlers for processing
-## 
+#
+# Default handlers for processing - see POD
+# 
 
 my %def_proc  =
 (
@@ -44,19 +45,19 @@ my %def_proc  =
     ':block-indent'   => sub{ block($_[1]);    },
     ':block-noindent' => sub{ block($_[1],1);  },
 
-    ':strip-cpp' => sub{strip($_[1],'/\*','\*/'),strip($_[1], '//');},
-    ':strip-c'   => sub{strip($_[1],'/\*','\*/');},
-    ':strip-xml' => sub{strip($_[1],'<!--','-->');},
-    ':strip-perl'=> sub{strip($_[1]);},
+    ':strip-cpp'      => sub{strip($_[1],'/\*','\*/'),strip($_[1], '//');},
+    ':strip-c'        => sub{strip($_[1],'/\*','\*/');},
+    ':strip-xml'      => sub{strip($_[1],'<!--','-->');},
+    ':strip-perl'     => sub{strip($_[1]);},
 );
 
 $def_proc{':default'}  = $def_proc{':raw'};
 $rex_proc              = join('|', keys %def_proc);
 
-###########################################################################
-# Import: 
+#
+# import: 
 # process arguments and tie caller's %DATA
-##
+#
 sub import
 {
     my $package = shift;
@@ -67,10 +68,10 @@ sub import
     $regex = $def_parse{$regex}    if($regex && $regex =~ /^$rex_parse$/);
     $regex = $def_parse{':default'}unless $regex;
 
-    if(!exists $modules{$caller})
-    {
+    # NB: test for existence...
+    if(!exists $modules{$caller}){
+        # process all callbacks that are stringified
         no strict 'refs';
-        # process all callbacks that are strings
         if($cback){
             foreach(@$cback){
                 if(!ref $_){
@@ -94,6 +95,7 @@ sub import
         *{"$caller\::DATA"} = {};
         tie %{"$caller\::DATA"}, $package, $caller;
 
+        # store private attributes till lazy-loading DATA
         $handles{$caller}   = \*{$caller."::DATA"};
         $modules{$caller}   = undef;
         $regexen{$caller}   = (ref $regex) ? $regex : qr($regex);
@@ -101,14 +103,16 @@ sub import
     }
 }
 
-###########################################################################
-# read DATA handle 
-# cant do during import as perl hasn't parsed that far by then
-##
+#
+# _read_data:
+# Parse and process DATA handle once %DATA has been used. 
+# Cant do during import as Perl hasn't parsed that far by then
+#
 sub _read_data
 {
     my $self = shift;
 
+    # NB:test for definedness...
     if(! defined $modules{$$self})
     {
         my (@data, $data, $tell, $rex, $code, $strip);
@@ -139,7 +143,6 @@ sub _read_data
         pop   @data if $data[-1] =~ /^\s*$/o;
         Carp::croak("Error: \%$$self\::DATA - bad key/value pairs")
             if (@data % 2);
-        
 
         #  invoke any callbacks...
         if($code){
@@ -149,43 +152,53 @@ sub _read_data
             }
         }
         
-        $modules{$$self} = {@data};     # coerce into hashref and
-        delete $modules{$$self}{''};    # remove empty keys
-        seek($data, $tell,0);           # cover our tracks
+        # coerce into hashref and cover our tracks
+        $modules{$$self} = {@data};
+        delete $modules{$$self}{''};
+        seek($data, $tell,0);
     }
 }
 
-###########################################################################
-# Utility functions:
-# can be used in client code if they want to implement
-# their own callback but get default behaviours too
-##
+#
+# Utility functions - see POD
+#
 
+#
+# compress: trim and compact all whitspace to ' '
+#
 sub compress
 {
     my $txt = shift;
     s#\s+# #gs, s#^\s+## , s#\s+$## for($$txt);
 }
 
+#
+# block: preserve common indentation and surrounding newlines
+#
 sub block
 {
     my $txt = shift;
     my $i   = shift;
     if($i){
+        # strip smallest common indentation
         ($i) = sort {length($a) <=> length($b)} $$txt =~ m#^$NL?(\s+)\S#mg;
         s#^$i##mg for($$txt);   
     }  
     s#^\s+$##mg for($$txt);
 }
 
+#
+# trim: remove trailing and leading whitespace
+#
 sub trim
 {
     my $txt = shift;
-    for($$txt) {
-	   s/^\s+//; s/\s+$//;
-    }
+    s#^\s+##, s#\s+$## for($$txt);
 }
 
+#
+# strip: remove (comment) sequences
+#
 sub strip
 {
     my $txt = shift;
@@ -194,18 +207,21 @@ sub strip
     $$txt =~ s#$beg.*?$end##sgi;
 }
 
+#
+# interpolate: simple template interpolation
+#
 sub interpolate
 {
     my $txt  = shift;
     my $vals = shift;
-    my $rex  = shift || '\$\((\w+)\)';
+    my $rex  = shift || $VARS;
     $$txt =~ s#$rex#$vals->{$1}#sg;
 }
 
-###########################################################################
+#
 # TIE HASH interface (read-only)
 # not much to see here...
-##
+#
 
 sub TIEHASH 
 {
@@ -293,11 +309,11 @@ Text::Embed - Cleanly seperate unwieldy text from your source code
 
 =head1 ABSTRACT
 
-Often, code requires chunks of text to operate - not large enough 
-to add extra file dependencies, but enough to make using quotes and 
+Code often requires chunks of text to operate - chunks not large enough 
+to warrant extra file dependencies, but enough to make using quotes and 
 heredocs' ugly.
 
-A typical example might be code generators - the text itself is code, 
+A typical example might be code generators. The text itself is code, 
 and as such is difficult to differentiate and maintain when it is 
 embedded inside more code. Similarly, CGI scripts often include 
 embedded HTML or SQL templates. 
@@ -310,7 +326,7 @@ from the logic> - and access them through the package variable B<%DATA>.
 
 =head2 General Usage:
 
-The general usage is expected to be suitable for a majority of cases.
+The general usage is expected to be suitable for a majority of cases:
 
     use Text::Embed;
 
@@ -358,10 +374,9 @@ first and remaining arguments in its invocation.
 
 By default, B<Text::Embed> uses similar syntax to the __DATA__ token to 
 seperate segments - a line consisting of two underscores surrounding an
-identifier.
+identifier. Of course, a suitable syntax depends on the text being embedded.
 
-Of course, what is suitable depends on the text being embedded, so a 
-REGEX or CODE reference can be passed as the first argument - in order 
+A REGEX or CODE reference can be passed as the first argument - in order 
 to gain finer control of how __DATA__ is parsed:
 
 =over 4
@@ -379,7 +394,7 @@ leading or trailing empty strings will be removed automatically.
     use Text::Embed &Some::Other::Function;
 
 A subroutine will be passed a reference to the __DATA__ I<string>. 
-It should return a list of key-value pairs.
+It should return a LIST of key-value pairs.
 
 =back
 
@@ -390,23 +405,21 @@ predefined formats:
 
 =item :default
 
-Line-oriented __DATA__ like format.
+Line-oriented __DATA__ like format:
 
     __BAZ__ 
-        baz baz baz
+    baz baz baz
     __FOO__
-        foo foo foo
-        foo foo foo
+    foo foo foo
+    foo foo foo
 
 =item :define
 
-Line-oriented CPP-like format.
+CPP-like format (%DATA is readonly - can be used to define constants):
 
-    #define BAZ 
-        baz baz baz
-    #define FOO
-        foo foo foo
-        foo foo foo
+    #define BAZ     baz baz baz
+    #define FOO     foo foo foo
+                    foo foo foo
 
 =item :cdata
 
@@ -427,7 +440,7 @@ number of callbacks.
 
 A common usage of this might be controlling how whitespace is represented 
 in each segment. B<Text::Embed> provides some likely defaults which operate
-on the hash values only:
+on the hash values only.
 
 =over 4
 
@@ -457,31 +470,9 @@ Same as B<:raw>
 
 =back
 
-If comments would make your segments easier to follow, B<Text::Embed> also 
-provides some defaults for stripping common comment syntax: 
-
-=over 4
-
-=item :strip-perl
-
-Strips Perl comments
-
-=item :strip-c
-
-Strips C-like comments - C</*...*/>
-
-=item :strip-cpp
-
-Strips both C-like and line-based C<//...> comments
-
-=item :strip-xml
-
-Strips XML/HTML-like comments - C<< <!-- ... --> >>
-
-=back
-
 If you need more control, CODE references or named subroutines can be 
-invoked as necessary.
+invoked as necessary. At this point it is safe to rename or modify keys. 
+Undefining a key removes the entry from B<%DATA>.
 
 =head3 An Example Callback chain
 
@@ -530,15 +521,14 @@ leaving B<%DATA> full of ready to execute DBI statement handlers:
 
     ..etc
 
-Notice that each pair is I<passed by reference>. At this point it is safe 
-to rename or modify keys. Undefining a key removes the entry from B<%DATA>.
+Notice that each pair is I<passed by reference>. 
 
 =head3 Utility Functions
 
 Several utility functions are available to aid implementing custom 
-processing handlers. 
+processing handlers. These are not exported into the callers namespace.
 
-These are mostly equivalent to the default processing options:
+The first are equivalent to the default processing options:
 
 =over 4
 
@@ -560,24 +550,35 @@ These are mostly equivalent to the default processing options:
 If a true value is passed as the second argument, then shared
 indentation is removed, ie B<:block-noindent>.
 
+=back
+
+=head3 Commenting 
+
+If comments would make your segments easier to manage, B<Text::Embed> 
+provides defaults handlers for stripping common comment syntax - 
+B<:strip-perl>, B<:strip-c>, B<:strip-cpp>, B<:strip-xml>. 
+
+=over 4
+
 =item Text::Embed::strip SCALARREF [REGEX] [REGEX]
 
-    use Text::Embed(':default',':strip-perl');
-    use Text::Embed(':default', sub {Text::Embed::strip($_[1]);} );
+    use Text::Embed(':default',':strip-c');
+    use Text::Embed(':default', sub {Text::Embed::strip($_[1], '/\*', '\*/');} );
 
-Strips all sequences between second and third arguments. For example, C++ 
-comments are stripped using:
+Strips all sequences between second and third arguments. The default 
+arguments are '#' and '\n' respectively.
 
-    Text::Embed::strip(\$my_data, '//');
-    Text::Embed::strip(\$my_data, '/\*', '\*/');
+=back
 
-The default arguments are '#' and '\n' respectively.
+=head3 Templating
+
+Typically, embedded text may well be some kind of template. Text::Embed 
+provides rudimentary variable interpolation for simple templates.
+The default variable syntax is of the form C<$(foo)>:
+
+=over 4
 
 =item Text::Embed::interpolate SCALARREF HASHREF [REGEX]
-
-Typically, segments may well be some kind of template. This function 
-can be used to interpolate values from a hash into the string data. 
-The default variable syntax is of the form C<$(foo)>:
 
     my $tmpl = "Hello $(name)! Your age is $(age)\n";
     my %vars = (name => 'World', age => 4.5 * (10 ** 9));
@@ -589,7 +590,7 @@ Any interpolation is done via a simple substitution. An additional
 regex argument should accomodate this appropriately, by capturing 
 the necessary hashkey in C<$1>: 
 
-    Text::Embed::interpolate(\$tmpl, \%vars, '<%(\w+)%>');
+    Text::Embed::interpolate(\$tmpl, \%vars, '<%(\S+)%>');
 
 =back
 

@@ -2,7 +2,7 @@
 
 BEGIN{ unshift @INC, '../lib'; }
 
-use Text::Embed;
+use Text::Embed ':define';
 
 
 
@@ -34,16 +34,11 @@ foreach(keys %DATA)
 __DATA__
 
 
-
-__trim__
-    
-
-
-    AAAAAAAAAA AAAAAAAAA AAAAAAAAA
+#define trim AAAAAAAAAA AAAAAAAAA AAAAAAAAA
 
 
 
-__block-preserve__
+#define block-preserve
 
 
 
@@ -57,7 +52,7 @@ __block-preserve__
 
 
 
-__block-ignore__
+#define block-ignore
 
 
 
@@ -71,7 +66,7 @@ __block-ignore__
 
 
 
-__compress__
+#define compress
 
 
 

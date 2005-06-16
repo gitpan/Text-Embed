@@ -1,5 +1,11 @@
 Revision history for Perl extension Text::Embed.
 
+0.03  Thu Jun 16 12:19:00 2005
+
+    - improved POD
+    - tidied source
+    - modified #define syntax to accomodate single-line constants
+
 0.02  Thu Mar 31 16:53:11 2005
 
     - made POD clearer

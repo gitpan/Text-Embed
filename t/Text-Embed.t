@@ -221,7 +221,7 @@ __TWO__
 // pathological data for :define parser
 //
 
-#define_foo 
+#define_foo
 #definexxx
 # define bar__baz
 <!-- these will break our modules too -->
